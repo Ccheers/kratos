@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -16,9 +17,11 @@ import (
 )
 
 const (
-	contextPackage       = protogen.GoImportPath("context")
-	transportHTTPPackage = protogen.GoImportPath("github.com/go-kratos/kratos/v2/transport/http")
-	bindingPackage       = protogen.GoImportPath("github.com/go-kratos/kratos/v2/transport/http/binding")
+	contextPackage            = protogen.GoImportPath("context")
+	transportHTTPPackage      = protogen.GoImportPath("github.com/go-kratos/kratos/v2/transport/http")
+	bindingPackage            = protogen.GoImportPath("github.com/go-kratos/kratos/v2/transport/http/binding")
+	middlewareSelectorPackage = protogen.GoImportPath("github.com/go-kratos/kratos/v2/middleware/selector")
+	middlewarePackage         = protogen.GoImportPath("github.com/go-kratos/kratos/v2/middleware")
 )
 
 var methodSets = make(map[string]int)
@@ -56,6 +59,8 @@ func generateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.
 	g.P("var _ = new(", contextPackage.Ident("Context"), ")")
 	g.P("var _ = ", bindingPackage.Ident("EncodeURL"))
 	g.P("const _ = ", transportHTTPPackage.Ident("SupportPackageIsVersion1"))
+	g.P("const _ = ", middlewarePackage.Ident("Middleware"))
+	g.P("const _ = new(", middlewareSelectorPackage.Ident("Builder"), ")")
 	g.P()
 
 	for _, service := range file.Services {
@@ -89,6 +94,21 @@ func genService(_ *protogen.Plugin, file *protogen.File, g *protogen.GeneratedFi
 			sd.Methods = append(sd.Methods, buildMethodDesc(g, method, http.MethodPost, path))
 		}
 	}
+	// 所有 methods 生成完成, 需要构建中间件集合
+	middlewareSets := make(map[string]struct{})
+	for _, method := range sd.Methods {
+		for _, name := range method.MiddlewareNames {
+			_, ok := middlewareSets[name]
+			if !ok {
+				middlewareSets[name] = struct{}{}
+				sd.MiddlewareNames = append(sd.MiddlewareNames, name)
+			}
+		}
+	}
+	sort.Slice(sd.MiddlewareNames, func(i, j int) bool {
+		return sd.MiddlewareNames[i] < sd.MiddlewareNames[j]
+	})
+
 	if len(sd.Methods) != 0 {
 		g.P(sd.execute())
 	}
@@ -209,15 +229,19 @@ func buildMethodDesc(g *protogen.GeneratedFile, m *protogen.Method, method, path
 		comment = "// " + m.GoName + strings.TrimPrefix(strings.TrimSuffix(comment, "\n"), "//")
 	}
 	return &methodDesc{
-		Name:         m.GoName,
-		OriginalName: string(m.Desc.Name()),
-		Num:          methodSets[m.GoName],
-		Request:      g.QualifiedGoIdent(m.Input.GoIdent),
-		Reply:        g.QualifiedGoIdent(m.Output.GoIdent),
-		Comment:      comment,
-		Path:         path,
-		Method:       method,
-		HasVars:      len(vars) > 0,
+		Name:            m.GoName,
+		OriginalName:    string(m.Desc.Name()),
+		Num:             methodSets[m.GoName],
+		Request:         g.QualifiedGoIdent(m.Input.GoIdent),
+		Reply:           g.QualifiedGoIdent(m.Output.GoIdent),
+		Comment:         comment,
+		Path:            path,
+		Method:          method,
+		HasVars:         len(vars) > 0,
+		HasBody:         false,
+		Body:            "",
+		ResponseBody:    "",
+		MiddlewareNames: parseMiddleware(m.Comments.Leading.String()),
 	}
 }
 

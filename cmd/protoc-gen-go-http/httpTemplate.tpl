@@ -14,6 +14,22 @@ type {{.ServiceType}}HTTPServer interface {
 {{- end}}
 }
 
+func New{{.ServiceType}}HTTPServerMiddleware(
+    {{- range .MiddlewareNames }}
+        {{.}} middleware.Middleware,
+    {{- end}}
+) middleware.Middleware {
+    return selector.Server(
+        {{- range .MethodSets }}
+            select.Server(
+                {{- range .MiddlewareNames }}
+                    {{.}},
+                {{- end}}
+            ).Path(Operation{{$svrType}}{{.OriginalName}}).Build(),
+        {{- end}}
+    ).Build()
+}
+
 func Register{{.ServiceType}}HTTPServer(s *http.Server, srv {{.ServiceType}}HTTPServer) {
 	r := s.Route("/")
 	{{- range .Methods}}
